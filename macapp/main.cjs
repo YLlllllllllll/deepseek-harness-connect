@@ -73,7 +73,7 @@ app.whenReady().then(() => {
     const script = app.isPackaged ? join(process.resourcesPath, 'connect.sh') : join(__dirname, '..', 'connect.sh');
     const args = [script, value.endpoint, '--remote-ssh', '--no-open', '--port', '0'];
     if (value.model) args.push('--model', value.model);
-    const env = {...process.env, PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
+    const env = {...process.env, PATH: join(app.getPath('home'), '.local/bin') + ':/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
       DSH_DATA_DIR: join(app.getPath('userData'), 'harness'), VLLM_API_KEY: apiKey || 'internal-no-auth'};
     for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) delete env[key];
     if (value.proxy) env.https_proxy = value.proxy;

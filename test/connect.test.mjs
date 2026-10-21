@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -29,6 +29,7 @@ async function fixture(t, models = [{id: 'demo', max_model_len: 65536}], badBund
   t.after(() => new Promise(resolve => server.close(resolve)));
   const endpoint = `http://127.0.0.1:${server.address().port}`;
   const env = {...process.env, DSH_DATA_DIR: data, VLLM_API_KEY: 'test-secret',
+    HOME: data, XDG_DATA_HOME: join(data,'.local/share'), DSH_CLI: '', PATH: dirname(process.execPath) + ':/usr/bin:/bin:/usr/sbin:/sbin',
     DSH_VERSION: '0.2.1-rc.2', VLLM_MODEL: '', DSH_INSTALL_METHOD: 'npm',
     NO_PROXY: '127.0.0.1', no_proxy: '127.0.0.1',
     HTTP_PROXY: 'http://127.0.0.1:1', HTTPS_PROXY: 'http://127.0.0.1:1'};
@@ -158,8 +159,58 @@ printf '#!/bin/sh\\necho 0.2.1-rc.2\\n' > "$prefix/node_modules/.bin/dsh"
 chmod +x "$prefix/node_modules/.bin/dsh"
 echo 'added 1 mock package'`}
 `, {mode: 0o755});
-  f.env.PATH = bin + ':' + process.env.PATH;
+  f.env.PATH = bin + ':' + f.env.PATH;
 }
+
+test('reuses a compatible dsh on PATH without downloading another runtime', async t => {
+  const f = await fixture(t);
+  await rm(join(f.data, 'runtime'), {recursive:true});
+  const bin = join(f.data, 'existing-bin'); await mkdir(bin);
+  await writeFile(join(bin, 'dsh'), '#!/bin/sh\nif [ "$1" = --version ]; then echo 0.2.1-rc.2; else printf "%s\\n" "$@"; fi\n', {mode:0o755});
+  f.env.PATH = bin + ':' + f.env.PATH;
+  const result = await f.run(['--no-open']);
+  assert.match(result.stderr, /Reusing compatible local dsh/);
+  assert.equal(result.stdout, 'web\n--no-open\n');
+  assert.ok(!(await readdir(f.data)).includes('runtime'));
+});
+
+test('reuses shared CLI runtime when the App uses a different data directory', async t => {
+  const f = await fixture(t);
+  await rm(join(f.data, 'runtime'), {recursive:true});
+  const bin = join(f.data, '.local/share/deepseek-harness-connect/runtime/dsh-0.2.1-rc.2/node_modules/.bin');
+  await mkdir(bin, {recursive:true});
+  await writeFile(join(bin, 'dsh'), '#!/bin/sh\necho 0.2.1-rc.2\n', {mode:0o755});
+  const result = await f.run(['--install-only']);
+  assert.match(result.stderr, /Reusing compatible local dsh/);
+  assert.ok(!(await readdir(f.data)).includes('runtime'));
+});
+
+test('reuses the shared Node installation when Node on PATH is incompatible', async t => {
+  const f = await fixture(t);
+  const bin = join(f.data, 'old-node-bin');await mkdir(bin);
+  await writeFile(join(bin,'node'),'#!/bin/sh\nexit 1\n',{mode:0o755});
+  await writeFile(join(bin,'npm'),'#!/bin/sh\nexit 1\n',{mode:0o755});
+  const shared = join(f.data, `.local/share/deepseek-harness-connect/tools/node-v24.15.0-${process.platform}-${process.arch}/bin`);
+  await mkdir(shared,{recursive:true});
+  await symlink(process.execPath,join(shared,'node'));
+  await symlink(join(dirname(process.execPath),'npm'),join(shared,'npm'));
+  f.env.PATH=bin+':'+f.env.PATH;f.env.DSH_NODE_VERSION='24.15.0';
+  const result=await f.run(['--install-only']);
+  assert.match(result.stderr,/Node.js v/);
+  assert.ok(!result.stderr.includes('Downloading node-'));
+  assert.ok(!(await readdir(f.data)).includes('tools'));
+});
+
+test('incompatible external dsh is preserved while the required version installs separately', async t => {
+  const f = await fixture(t);
+  await mockInstall(f);
+  const old = join(f.data, 'mock-bin/dsh');
+  await writeFile(old, '#!/bin/sh\necho 0.1.0\n', {mode:0o755});
+  const result = await f.run(['--install-only']);
+  assert.match(result.stderr, /Installing Harness/);
+  assert.equal((await exec(old, ['--version'])).stdout.trim(), '0.1.0');
+  assert.ok((await readdir(join(f.data, 'runtime'))).includes('dsh-0.2.1-rc.2'));
+});
 
 test('fresh installation reports stages and elapsed progress and preserves its npm log', async t => {
   const f = await fixture(t);

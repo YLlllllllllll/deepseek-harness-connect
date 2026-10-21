@@ -3,7 +3,7 @@
 用一条命令安装 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)，连接你自己的 OpenAI-compatible endpoint。
 
 ```bash
-curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.2.0/connect.sh | bash -s -- 'http://localhost:8000/v1'
+curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.2.1/connect.sh | bash -s -- 'http://localhost:8000/v1'
 ```
 
 把最后一个参数替换为你的 endpoint。默认启动 Web UI；首次安装，后续复用。
@@ -26,7 +26,7 @@ Harness 默认固定为 `0.2.1-rc.2`。
 下载一次，之后可以直接运行：
 
 ```bash
-curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.2.0/connect.sh -o connect.sh
+curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.2.1/connect.sh -o connect.sh
 bash connect.sh 'http://localhost:8000/v1'
 ```
 
@@ -72,7 +72,23 @@ bash connect.sh 'http://localhost:8000/v1'
 
 ## macOS App 与远程 SSH
 
-[下载 macOS 安装包](https://github.com/YLlllllllllll/deepseek-harness-connect/releases/tag/v1.2.0)：
+一键安装、检查更新并打开（每次运行自动检测本地版本）：
+
+```bash
+curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.2.1/install-macos.sh | bash
+```
+
+已安装最新版或更高版本时，只检查小量版本信息并直接打开，不下载 App ZIP。
+发现新版时下载、校验 SHA-256 和完整性签名，再替换 App；启动命令失败会恢复旧版。
+网络检查失败时仍可打开本机已有 App；正在运行的 App 不会被替换，请退出后重跑以更新。
+安装到 `~/Applications`，不需要 sudo，不修改用户的连接、配置和会话数据。
+
+启动时自动检查安装目录、PATH、`~/.local/bin/dsh` 和 CLI 的共享安装目录。
+已有 `dsh 0.2.1-rc.2` 时直接复用，不重复下载运行时；不兼容时为 App 单独安装固定版本，
+保留系统原有 dsh。命令行可用 `DSH_CLI=/absolute/path/to/dsh` 指定候选 CLI，仍检查版本。
+已有 dsh 只免除运行时下载；首次安装原生 App 仍需要 App 安装包。
+
+[下载 macOS 安装包](https://github.com/YLlllllllllll/deepseek-harness-connect/releases/tag/v1.2.1)：
 Apple Silicon 选择 `arm64.dmg`，Intel 选择 `x64.dmg`，拖入 Applications 后打开。
 这是独立 Electron 窗口。社区构建未做 Apple Developer ID 签名或公证；
 macOS 若拦截，可从系统设置的“隐私与安全性”确认打开，不需要关闭系统安全功能。
@@ -153,7 +169,7 @@ npm 路径只固定 Harness 顶层版本，不同时间首次安装仍可能解�
 ```bash
 bash -n connect.sh
 node --test test/*
-bash release.sh v1.2.0
+bash release.sh v1.2.1
 ```
 
 源码发布包包含安装器、文档、测试、打包脚本和许可证。可选运行包额外包含已安装的

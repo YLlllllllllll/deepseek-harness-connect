@@ -21,7 +21,7 @@ jobs:
           node-version: 24.15.0
           cache: npm
           cache-dependency-path: macapp/package-lock.json
-      - run: bash -n connect.sh && node --test test/*
+      - run: bash -n connect.sh && bash -n install-macos.sh && node --test test/*
       - run: npm ci
         working-directory: macapp
       - run: npx electron . --smoke-test

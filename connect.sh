@@ -59,6 +59,7 @@ case "$(uname -m)" in x86_64|amd64) ARCH=x64 ;; aarch64|arm64) ARCH=arm64 ;; *) 
 DATA=${DSH_DATA_DIR:-"${XDG_DATA_HOME:-$HOME/.local/share}/deepseek-harness-connect"}
 mkdir -p "$DATA"
 DATA=$(cd "$DATA" && pwd)
+SHARED_DATA="${XDG_DATA_HOME:-$HOME/.local/share}/deepseek-harness-connect"
 VERSION=${DSH_VERSION:-0.2.1-rc.2}
 [[ $REMOTE_SSH == 0 || $VERSION == 0.2.1-rc.2 ]] || die '--remote-ssh currently requires dsh 0.2.1-rc.2'
 NODE_VERSION=${DSH_NODE_VERSION:-24.15.0}
@@ -89,6 +90,10 @@ valid_node() {
     node -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit(a>=24||(a===22&&b>=19)?0:1)' 2>/dev/null
 }
 status "[1/4] Checking Node.js ($PLATFORM/$ARCH)"
+SHARED_NODE="$SHARED_DATA/tools/node-v$NODE_VERSION-$PLATFORM-$ARCH"
+if ! valid_node && [[ -x $SHARED_NODE/bin/node && -x $SHARED_NODE/bin/npm ]]; then
+  export PATH="$SHARED_NODE/bin:$PATH"
+fi
 if ! valid_node; then
   NODE_HOME="$DATA/tools/node-v$NODE_VERSION-$PLATFORM-$ARCH"
   if [[ ! -x $NODE_HOME/bin/node ]]; then
@@ -125,6 +130,18 @@ if [[ $VERSION == 0.2.1-rc.2 && $PROFILE == linux-x64-node24-abi137-glibc ]]; th
 
 RUNTIME="$DATA/runtime/dsh-$VERSION"
 CLI="$RUNTIME/node_modules/.bin/dsh"
+if [[ ! -x $CLI ]]; then
+  CANDIDATES=("${DSH_CLI:-}" "$(command -v dsh || true)" "$HOME/.local/bin/dsh"
+    "$SHARED_DATA/runtime/dsh-$VERSION/node_modules/.bin/dsh")
+  for CANDIDATE in "${CANDIDATES[@]}"; do
+    [[ -n $CANDIDATE && -x $CANDIDATE ]] || continue
+    if [[ $("$CANDIDATE" --version 2>/dev/null) == "$VERSION" ]]; then
+      CLI=$CANDIDATE
+      status "[2/4] Reusing compatible local dsh: $CLI"
+      break
+    fi
+  done
+fi
 if [[ ! -x $CLI ]]; then
   mkdir -p "$DATA/runtime"
   LOCK="$RUNTIME.lock"
