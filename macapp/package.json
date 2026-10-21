@@ -8,12 +8,13 @@
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --mac"
+    "dist": "node --require ./build-fs.cjs ./node_modules/electron-builder/cli.js --mac"
   },
   "devDependencies": {
     "electron": "45.0.0",
     "electron-builder": "26.15.3",
-    "ssh2": "1.17.0"
+    "ssh2": "1.17.0",
+    "graceful-fs": "4.2.11"
   },
   "build": {
     "appId": "io.github.ylllllllllll.harness-connect",
