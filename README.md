@@ -3,13 +3,19 @@
 用一条命令安装 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)，连接你自己的 OpenAI-compatible endpoint。
 
 ```bash
-curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.0.1/connect.sh | bash -s -- 'http://localhost:8000/v1'
+curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.1.0/connect.sh | bash -s -- 'http://localhost:8000/v1'
 ```
 
 把最后一个参数替换为你的 endpoint。默认启动 Web UI；首次安装，后续复用。
 支持 Linux / macOS 的 x64 / arm64。需要 Bash、curl、tar；不需要 sudo、Git 或 Python。
 有合适的 Node.js 时直接复用，否则在用户目录安装 Node.js 24.15.0 并核对 SHA-256。
 Harness 默认固定为 `0.2.1-rc.2`。
+
+`v1.1.0` 在 Linux x64 / glibc / Node 24 ABI 137 上默认下载约 161 MiB 的预打包运行时，
+校验 SHA-256 后直接解压，跳过现场 npm 解析、下载数百个包和安装的过程。
+已包含完整依赖与原有许可证文件；安装包不含连接配置、会话、密钥或安装日志。
+其他平台和 Node 版本继续使用 npm；包下载失败时自动回退 npm，校验失败则停止。
+已有安装直接复用，不会重新下载运行包。
 
 安装时显示 `[1/4] Node.js → [2/4] Harness → [3/4] endpoint → [4/4] Web UI`。
 脚本和 Node 文件下载显示真实百分比；npm 不提供总下载大小，因此安装阶段每 5 秒
@@ -20,7 +26,7 @@ Harness 默认固定为 `0.2.1-rc.2`。
 下载一次，之后可以直接运行：
 
 ```bash
-curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.0.1/connect.sh -o connect.sh
+curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.1.0/connect.sh -o connect.sh
 bash connect.sh 'http://localhost:8000/v1'
 ```
 
@@ -82,25 +88,35 @@ bash connect.sh 'http://localhost:8000/v1'
 | `DSH_NODE_VERSION` | 缺少 Node 时安装的版本，默认 `24.15.0` |
 | `DSH_NODE_MIRROR` | Node 下载源，默认 `https://nodejs.org/dist` |
 | `DSH_NPM_REGISTRY` | npm registry，默认 `https://registry.npmjs.org` |
+| `DSH_INSTALL_METHOD` | `auto`（默认）、`npm` 或 `prebuilt` |
+| `DSH_RUNTIME_BASE_URL` | 可覆盖运行包下载目录；仍校验安装器内固定的 SHA-256 |
 | `DSH_CONTEXT_WINDOW` | 覆盖 `/models` 声明的 `max_model_len`；缺失时使用 32768 |
 | `DSH_MAX_TOKENS` | 输出预算，默认不超过 4096 或上下文的四分之一 |
 | `DSH_API_TIMEOUT` | 每次 API 请求超时秒数，默认 180 |
 
 Linux 使用官方 Node 二进制，需兼容的 glibc 系统；Alpine/musl 用户应先安装满足要求的
 Node.js。此仓库的本机 live 验证覆盖 Linux x64；其他平台有安装路径支持，但尚无 live 验证。
-固定 Harness 顶层版本；首次安装的完整依赖解析保存在本机 `package-lock.json`，
-不同时间首次安装仍可能解析到不同的传递依赖。
+预打包路径固定完整依赖，并通过 `BUNDLE.json` 绑定平台、Node ABI 与 lockfile SHA。
+npm 路径只固定 Harness 顶层版本，不同时间首次安装仍可能解析到不同的传递依赖。
+
+本机 Linux x64 对照：旧版空 npm 缓存首次安装约 135 秒；预打包运行时经本地 HTTP
+下载、校验、解压和配置约 5.6 秒，重定位后的 Web UI 返回 HTTP 200。
+后一个数据不包含公网下载耗时，实际总时间取决于 161 MiB 文件的下载速度。
 
 ## 本地检查和打包
 
 ```bash
 bash -n connect.sh
 node --test test/connect.test.mjs
-bash release.sh v1.0.1
+bash release.sh v1.1.0
 ```
 
-发布包只包含安装器、文档、测试和许可证，不含 endpoint、API key、会话、node_modules
-或机器配置。`dist/` 下生成 `.tar.gz` 与 `SHA256SUMS`，可上传 GitHub Release 或内网下载站。
+源码发布包包含安装器、文档、测试、打包脚本和许可证。可选运行包额外包含已安装的
+公开 npm 依赖；两者都不含 endpoint、API key、会话或机器配置。
+`dist/` 下生成 `.tar.gz` 与 SHA-256，可上传 GitHub Release 或内网下载站。
+
+维护者可通过 `bash bundle-runtime.sh /path/to/installed/runtime` 生成运行包；
+将输出的 SHA-256 更新到安装器，并完成重定位和 Web UI 检查后再发布。
 
 DeepSeek Harness 是 developer preview。Web 中提交任务以及 `--run` 会运行真实 agent，
 它可以使用 Harness 提供的文件和命令工具；请从准备操作的项目目录运行。

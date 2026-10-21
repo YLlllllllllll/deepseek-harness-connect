@@ -19,7 +19,8 @@ Default: start the Web UI on 127.0.0.1:3080. Extra arguments go to dsh web,
 for example --no-open --port 3081. No sudo or Python is required.
 
 Environment: VLLM_API_KEY, DSH_DATA_DIR, DSH_VERSION, DSH_NODE_VERSION,
-DSH_NPM_REGISTRY, DSH_NODE_MIRROR, DSH_CONTEXT_WINDOW, DSH_MAX_TOKENS.
+DSH_NPM_REGISTRY, DSH_NODE_MIRROR, DSH_CONTEXT_WINDOW, DSH_MAX_TOKENS,
+DSH_INSTALL_METHOD (auto|npm|prebuilt), DSH_RUNTIME_BASE_URL.
 Download proxies use standard HTTPS_PROXY/https_proxy variables. Model API
 traffic is direct. No proxy, endpoint, or secret is built into this script.
 HELP
@@ -56,6 +57,8 @@ mkdir -p "$DATA"
 DATA=$(cd "$DATA" && pwd)
 VERSION=${DSH_VERSION:-0.2.1-rc.2}
 NODE_VERSION=${DSH_NODE_VERSION:-24.15.0}
+METHOD=${DSH_INSTALL_METHOD:-auto}
+case "$METHOD" in auto|npm|prebuilt) ;; *) die 'DSH_INSTALL_METHOD must be auto, npm, or prebuilt' ;; esac
 [[ $VERSION =~ ^[0-9][0-9A-Za-z.+-]*$ && $NODE_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die 'Invalid version'
 STAGE=
 LOCK=
@@ -110,6 +113,10 @@ if ! valid_node; then
 fi
 valid_node || die 'Node ^22.19 or >=24 and npm are required'
 status "[1/4] Node.js $(node --version) ready"
+PROFILE=$(node -p '[process.platform,process.arch,"node"+process.versions.node.split(".")[0],"abi"+process.versions.modules,process.report.getReport().header.glibcVersionRuntime?"glibc":"other"].join("-")')
+FAST_SUPPORTED=0
+if [[ $VERSION == 0.2.1-rc.2 && $PROFILE == linux-x64-node24-abi137-glibc ]]; then FAST_SUPPORTED=1; fi
+[[ $METHOD != prebuilt || $FAST_SUPPORTED -eq 1 ]] || die 'Prebuilt runtime currently supports dsh 0.2.1-rc.2, Linux x64 glibc, Node 24 ABI 137'
 
 RUNTIME="$DATA/runtime/dsh-$VERSION"
 CLI="$RUNTIME/node_modules/.bin/dsh"
@@ -118,34 +125,70 @@ if [[ ! -x $CLI ]]; then
   LOCK="$RUNTIME.lock"
   mkdir "$LOCK" 2>/dev/null || { LOCK=; die 'Another Harness installation is in progress'; }
   STAGE=$(mktemp -d "$DATA/runtime/.dsh.XXXXXX")
-  status "[2/4] Installing Harness $VERSION; npm resolves dependencies before downloading"
-  status 'npm has no overall download percentage; elapsed time and completed HTTP/cache operations follow every 5s'
-  STARTED=$SECONDS
-  : > "$STAGE/npm-install.log"
-  npm install --prefix "$STAGE" --save-exact --no-audit --no-fund --progress=false --loglevel=http \
-    --registry="${DSH_NPM_REGISTRY:-https://registry.npmjs.org}" \
-    --fetch-timeout=60000 --fetch-retries=1 "@deepseek-ai/dsh@$VERSION" > "$STAGE/npm-install.log" 2>&1 &
-  INSTALL_PID=$!
-  while kill -0 "$INSTALL_PID" 2>/dev/null; do
-    COMPLETED=$(awk '/^npm http / {n++} END {print n+0}' "$STAGE/npm-install.log")
-    status "[2/4] npm: $((SECONDS-STARTED))s elapsed; $COMPLETED HTTP/cache operations completed"
-    sleep 5
-  done
-  if wait "$INSTALL_PID"; then INSTALL_PID=;
-  else
-    INSTALL_CODE=$?
-    INSTALL_PID=
-    cat "$STAGE/npm-install.log" >&2
-    die "npm install failed (exit $INSTALL_CODE)"
+  BUNDLED=0
+  if [[ $METHOD != npm && $FAST_SUPPORTED -eq 1 ]]; then
+    status '[2/4] Downloading prebuilt Harness runtime; skipping npm dependency resolution and installation'
+    BASE=${DSH_RUNTIME_BASE_URL:-https://github.com/YLlllllllllll/deepseek-harness-connect/releases/download/v1.1.0}
+    FILE=dsh-0.2.1-rc.2-linux-x64-node24-abi137.tar.gz
+    EXPECTED=728363d06b1918daa95212035e7f8fcfd721ff7607a6eb3da70d7383a327a297
+    if download "${BASE%/}/$FILE" "$STAGE/runtime.tar.gz"; then
+      if command -v sha256sum >/dev/null; then ACTUAL=$(sha256sum "$STAGE/runtime.tar.gz");
+      elif command -v shasum >/dev/null; then ACTUAL=$(shasum -a 256 "$STAGE/runtime.tar.gz");
+      else die 'sha256sum or shasum is required'; fi
+      [[ ${ACTUAL%% *} == "$EXPECTED" ]] || die 'Prebuilt runtime checksum mismatch'
+      status '[2/4] Runtime checksum verified; extracting'
+      tar -xzf "$STAGE/runtime.tar.gz" -C "$STAGE"
+      rm "$STAGE/runtime.tar.gz"
+      node --input-type=module - "$STAGE" <<'JS'
+import {readFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {createHash} from 'node:crypto';
+const root = process.argv[2];
+const info = JSON.parse(readFileSync(join(root, 'BUNDLE.json')));
+const sha = createHash('sha256').update(readFileSync(join(root, 'package-lock.json'))).digest('hex');
+if (info.schema !== 1 || info.harness !== '0.2.1-rc.2' || info.platform !== process.platform ||
+    info.arch !== process.arch || info.nodeMajor !== Number(process.versions.node.split('.')[0]) ||
+    info.nodeAbi !== process.versions.modules || info.lockSha256 !== sha)
+  throw new Error('Prebuilt runtime manifest/profile mismatch');
+JS
+      BUNDLED=1
+    elif [[ $METHOD == prebuilt ]]; then die 'Prebuilt runtime download failed';
+    else
+      status '[2/4] Prebuilt download unavailable; falling back to npm'
+      rm -f "$STAGE/runtime.tar.gz"
+    fi
   fi
-  status "[2/4] npm completed in $((SECONDS-STARTED))s"
-  tail -n 5 "$STAGE/npm-install.log" >&2
+  if [[ $BUNDLED -eq 0 ]]; then
+    status "[2/4] Installing Harness $VERSION; npm resolves dependencies before downloading"
+    status 'npm has no overall download percentage; elapsed time and completed HTTP/cache operations follow every 5s'
+    STARTED=$SECONDS
+    : > "$STAGE/npm-install.log"
+    npm install --prefix "$STAGE" --save-exact --no-audit --no-fund --progress=false --loglevel=http \
+      --registry="${DSH_NPM_REGISTRY:-https://registry.npmjs.org}" \
+      --fetch-timeout=60000 --fetch-retries=1 "@deepseek-ai/dsh@$VERSION" > "$STAGE/npm-install.log" 2>&1 &
+    INSTALL_PID=$!
+    while kill -0 "$INSTALL_PID" 2>/dev/null; do
+      COMPLETED=$(awk '/^npm http / {n++} END {print n+0}' "$STAGE/npm-install.log")
+      status "[2/4] npm: $((SECONDS-STARTED))s elapsed; $COMPLETED HTTP/cache operations completed"
+      sleep 5
+    done
+    if wait "$INSTALL_PID"; then INSTALL_PID=;
+    else
+      INSTALL_CODE=$?
+      INSTALL_PID=
+      cat "$STAGE/npm-install.log" >&2
+      die "npm install failed (exit $INSTALL_CODE)"
+    fi
+    status "[2/4] npm completed in $((SECONDS-STARTED))s"
+    tail -n 5 "$STAGE/npm-install.log" >&2
+  fi
   "$STAGE/node_modules/.bin/dsh" --version >&2
   [[ ! -e $RUNTIME ]] || die "Incomplete Harness installation exists: $RUNTIME"
   mv "$STAGE" "$RUNTIME"
   STAGE=
   cleanup; LOCK=
-  status "[2/4] Harness ready; installation log: $RUNTIME/npm-install.log"
+  status '[2/4] Harness ready'
+  if [[ -f $RUNTIME/npm-install.log ]]; then status "Installation log: $RUNTIME/npm-install.log"; fi
 else
   status "[2/4] Reusing installed Harness $VERSION"
 fi

@@ -11,13 +11,14 @@ import { promisify } from 'node:util';
 const exec = promisify(execFile);
 const script = fileURLToPath(new URL('../connect.sh', import.meta.url));
 
-async function fixture(t, models = [{id: 'demo', max_model_len: 65536}]) {
+async function fixture(t, models = [{id: 'demo', max_model_len: 65536}], badBundle = false) {
   const data = await mkdtemp(join(tmpdir(), 'harness-connect-'));
   t.after(() => rm(data, {recursive: true, force: true}));
   const bin = join(data, 'runtime/dsh-0.2.1-rc.2/node_modules/.bin');
   await mkdir(bin, {recursive: true});
   await writeFile(join(bin, 'dsh'), '#!/bin/sh\nprintf "%s\\n" "$@"\n', {mode: 0o755});
   const server = createServer((req, res) => {
+    if (badBundle && req.url.endsWith('.tar.gz')) {res.end('invalid runtime bytes'); return;}
     if (req.headers.authorization !== 'Bearer test-secret' || req.url !== '/v1/models') {
       res.writeHead(400); res.end('Unexpected request'); return;
     }
@@ -28,7 +29,8 @@ async function fixture(t, models = [{id: 'demo', max_model_len: 65536}]) {
   t.after(() => new Promise(resolve => server.close(resolve)));
   const endpoint = `http://127.0.0.1:${server.address().port}`;
   const env = {...process.env, DSH_DATA_DIR: data, VLLM_API_KEY: 'test-secret',
-    DSH_VERSION: '0.2.1-rc.2', VLLM_MODEL: '',
+    DSH_VERSION: '0.2.1-rc.2', VLLM_MODEL: '', DSH_INSTALL_METHOD: 'npm',
+    NO_PROXY: '127.0.0.1', no_proxy: '127.0.0.1',
     HTTP_PROXY: 'http://127.0.0.1:1', HTTPS_PROXY: 'http://127.0.0.1:1'};
   delete env.DSH_CONTEXT_WINDOW; delete env.DSH_MAX_TOKENS;
   return {data, endpoint, env, run: args => exec('bash', [script, endpoint, ...args], {env, timeout: 15000})};
@@ -113,6 +115,33 @@ test('npm failures print their log and release the installer lock', async t => {
   await assert.rejects(f.run(['--install-only']), error => {
     assert.match(error.stderr, /mock registry failure/);
     assert.match(error.stderr, /npm install failed \(exit 23\)/);
+    return true;
+  });
+  assert.deepEqual(await readdir(join(f.data, 'runtime')), []);
+});
+
+const fastProfile = process.platform === 'linux' && process.arch === 'x64' &&
+  process.versions.node.startsWith('24.') && process.versions.modules === '137' &&
+  !!process.report.getReport().header.glibcVersionRuntime;
+
+test('auto mode falls back to npm when the runtime download is unavailable', {skip: !fastProfile}, async t => {
+  const f = await fixture(t);
+  await mockInstall(f);
+  f.env.DSH_INSTALL_METHOD = 'auto';
+  f.env.DSH_RUNTIME_BASE_URL = f.endpoint;
+  const {stderr} = await f.run(['--install-only']);
+  assert.match(stderr, /falling back to npm/);
+  assert.match(stderr, /npm completed/);
+});
+
+test('rejects corrupt runtime before extraction and never silently falls back on a checksum failure', {skip: !fastProfile}, async t => {
+  const f = await fixture(t, [{id: 'demo'}], true);
+  await rm(join(f.data, 'runtime'), {recursive: true});
+  f.env.DSH_INSTALL_METHOD = 'auto';
+  f.env.DSH_RUNTIME_BASE_URL = f.endpoint;
+  await assert.rejects(f.run(['--install-only']), error => {
+    assert.match(error.stderr, /Prebuilt runtime checksum mismatch/);
+    assert.doesNotMatch(error.stderr, /Installing Harness/);
     return true;
   });
   assert.deepEqual(await readdir(join(f.data, 'runtime')), []);
