@@ -89,6 +89,16 @@ valid_node() {
   command -v node >/dev/null && command -v npm >/dev/null &&
     node -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit(a>=24||(a===22&&b>=19)?0:1)' 2>/dev/null
 }
+DESKTOP_RUNTIME=${DSH_BUNDLED_RUNTIME:-}
+if [[ -n $DESKTOP_RUNTIME ]]; then
+  [[ -x $DESKTOP_RUNTIME/node/bin/node && -x $DESKTOP_RUNTIME/node/bin/npm && -x $DESKTOP_RUNTIME/harness/node_modules/.bin/dsh && -x $DESKTOP_RUNTIME/pnpm/node_modules/.bin/pnpm && -f $DESKTOP_RUNTIME/BUNDLE.json ]] || die 'Desktop runtime is incomplete; reinstall the App'
+  export PATH="$DESKTOP_RUNTIME/node/bin:$DESKTOP_RUNTIME/pnpm/node_modules/.bin:$PATH"
+  node - "$DESKTOP_RUNTIME/BUNDLE.json" "$VERSION" <<'JS'
+const b=JSON.parse(require('node:fs').readFileSync(process.argv[2]));
+if(b.schema!==1||b.platform!==process.platform||b.arch!==process.arch||b.node!==process.versions.node||b.nodeAbi!==process.versions.modules||b.harness!==process.argv[3])
+  throw new Error('Desktop runtime platform/version mismatch');
+JS
+fi
 status "[1/4] Checking Node.js ($PLATFORM/$ARCH)"
 SHARED_NODE="$SHARED_DATA/tools/node-v$NODE_VERSION-$PLATFORM-$ARCH"
 if ! valid_node && [[ -x $SHARED_NODE/bin/node && -x $SHARED_NODE/bin/npm ]]; then
@@ -130,6 +140,10 @@ if [[ $VERSION == 0.2.1-rc.2 && $PROFILE == linux-x64-node24-abi137-glibc ]]; th
 
 RUNTIME="$DATA/runtime/dsh-$VERSION"
 CLI="$RUNTIME/node_modules/.bin/dsh"
+if [[ -n $DESKTOP_RUNTIME ]]; then
+  CLI="$DESKTOP_RUNTIME/harness/node_modules/.bin/dsh"
+  status '[2/4] Using the runtime shipped with this App; no dependency downloads'
+fi
 if [[ ! -x $CLI ]]; then
   CANDIDATES=("${DSH_CLI:-}" "$(command -v dsh || true)" "$HOME/.local/bin/dsh"
     "$SHARED_DATA/runtime/dsh-$VERSION/node_modules/.bin/dsh")
@@ -399,6 +413,11 @@ JS
     export PATH="$PNPM_HOME/node_modules/.bin:$PATH"
   fi
   PLUGINS="$CONNECTION/profiles/web"
+  if [[ -n $DESKTOP_RUNTIME && ! -e $PLUGINS/package.json ]]; then
+    mkdir -p "$PLUGINS"
+    status 'Preparing bundled SSH configuration locally; no npm installation'
+    cp -a "$DESKTOP_RUNTIME/web-profile/." "$PLUGINS/"
+  fi
   if ! node - "$PLUGINS" <<'JS'
 const fs = require('node:fs'), path = require('node:path');
 try {
@@ -410,6 +429,7 @@ try {
 } catch { process.exit(1); }
 JS
   then
+    [[ -z $DESKTOP_RUNTIME ]] || die 'The local SSH profile is incomplete or incompatible; repair its plugins before retrying (the App will not download dependencies)'
     status 'Installing remote files, terminal and SSH settings plugins (first use only)'
     "$CLI" plugin --profile web add --save-exact dsh-better-sidebar@0.28.0 \
       @zhangfengshun/dsh-remote-ssh@2.4.36 \

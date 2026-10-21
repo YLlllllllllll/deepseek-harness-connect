@@ -3,7 +3,7 @@
 用一条命令安装 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)，连接你自己的 OpenAI-compatible endpoint。
 
 ```bash
-curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.2.1/connect.sh | bash -s -- 'http://localhost:8000/v1'
+curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.3.0/connect.sh | bash -s -- 'http://localhost:8000/v1'
 ```
 
 把最后一个参数替换为你的 endpoint。默认启动 Web UI；首次安装，后续复用。
@@ -26,7 +26,7 @@ Harness 默认固定为 `0.2.1-rc.2`。
 下载一次，之后可以直接运行：
 
 ```bash
-curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.2.1/connect.sh -o connect.sh
+curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.3.0/connect.sh -o connect.sh
 bash connect.sh 'http://localhost:8000/v1'
 ```
 
@@ -75,7 +75,7 @@ bash connect.sh 'http://localhost:8000/v1'
 一键安装、检查更新并打开（每次运行自动检测本地版本）：
 
 ```bash
-curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.2.1/install-macos.sh | bash
+curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.3.0/install-macos.sh | bash
 ```
 
 已安装最新版或更高版本时，只检查小量版本信息并直接打开，不下载 App ZIP。
@@ -83,20 +83,19 @@ curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek
 网络检查失败时仍可打开本机已有 App；正在运行的 App 不会被替换，请退出后重跑以更新。
 安装到 `~/Applications`，不需要 sudo，不修改用户的连接、配置和会话数据。
 
-启动时自动检查安装目录、PATH、`~/.local/bin/dsh` 和 CLI 的共享安装目录。
-已有 `dsh 0.2.1-rc.2` 时直接复用，不重复下载运行时；不兼容时为 App 单独安装固定版本，
-保留系统原有 dsh。命令行可用 `DSH_CLI=/absolute/path/to/dsh` 指定候选 CLI，仍检查版本。
-已有 dsh 只免除运行时下载；首次安装原生 App 仍需要 App 安装包。
+App 内置固定版本的 Node、Harness 和 SSH 插件。首次 App ZIP 比旧版更大，
+但输入 endpoint 后只准备本地配置并查询模型，不再从 npm 下载和安装依赖。
+已安装最新版时跳过安装包下载。命令行安装器仍会检查已有 dsh 并复用兼容版本。
 
-[下载 macOS 安装包](https://github.com/YLlllllllllll/deepseek-harness-connect/releases/tag/v1.2.1)：
-Apple Silicon 选择 `arm64.dmg`，Intel 选择 `x64.dmg`，拖入 Applications 后打开。
+[下载 macOS 安装包](https://github.com/YLlllllllllll/deepseek-harness-connect/releases/tag/v1.3.0)：
+Apple Silicon 选择 `arm64.zip`，Intel 选择 `x64.zip`，解压并放入 Applications 后打开。
 这是独立 Electron 窗口。社区构建未做 Apple Developer ID 签名或公证；
 macOS 若拦截，可从系统设置的“隐私与安全性”确认打开，不需要关闭系统安全功能。
 
 1. 首屏填写任意 OpenAI-compatible endpoint；多个模型时填写模型 ID。
-2. 有下载代理时展开高级设置填写代理地址。首次安装显示进度，之后复用本地缓存。
-3. 进入后打开 **Settings → Remote SSH**，填写主机、端口、用户名、密码或私钥；可添加多个连接，也可导入 `~/.ssh/config`。
-4. 点击连接测试，再从 **Add Workspace → Select Remote Directory** 选择远程项目。文件侧栏直接操作远端，终端进入所选目录。密码终端会再次提示输入密码；命令和文件工具使用设置中保存的密码。
+2. 进入主窗口后，点击右上角 **远程服务器**，或菜单栏同名菜单。
+3. 填写 SSH 地址、端口、用户名、密码或私钥以及远程项目目录，点击 **保存服务器**。可以保存多个连接。
+4. 点击 **测试连接**，再点击 **添加远程工作区**。从主窗口左侧选择项目，文件侧栏直接操作远端，终端进入所选目录。密码终端会再次提示输入密码；命令和文件工具使用设置中保存的密码。
 
 安装包不内置 endpoint、SSH 主机或密码。模型 API key 仅保留在本次服务进程的环境中，
 App 不保存它；endpoint、模型 ID 和下载代理保存于 App 的用户数据目录。
@@ -127,13 +126,22 @@ SSH 文件/命令由 [dsh-remote-ssh](https://github.com/ZhangFengshun/dsh-remot
 可提供远程完整 DSH 的 [dsh-ssh-workspace](https://github.com/sincerity711/dsh-ssh-workspace)
 目前声明绑定 `0.2.0-rc.2`，本项目尚未集成或验证它。
 
-App 构建：`cd macapp && npm ci && npm run dist`（macOS）。
-仓库的 `macOS app` Actions 工作流分别构建 Apple Silicon 和 Intel，
-检查连接表单、preload 与 IPC 后生成 DMG/ZIP。源码中不含 Apple 签名凭据。
+App 构建（macOS，Node 24.15.0）：
+
+```bash
+bash prepare-desktop-runtime.sh
+cd macapp
+npm ci
+npm run dist
+```
+
+仓库的 `macOS app` Actions 工作流分别构建 Apple Silicon 和 Intel ZIP，
+使用隔离的本机 SSH 服务验证真实界面中的保存、密码认证和工作区创建，
+并对打包后的 App 再执行相同测试。该测试不发起模型推理。源码中不含 Apple 签名凭据。
 
 ## 网络与安装位置
 
-运行机器需要能访问 endpoint。首次安装还需要访问 GitHub、Node.js 和 npm 下载源，
+运行机器需要能访问 endpoint。App 安装需要访问 GitHub；命令行首次安装还需要访问 Node.js 和 npm 下载源，
 可通过标准 `HTTPS_PROXY/https_proxy` 环境变量使用所在网络的代理。
 只通内网而无下载出口时，需提供内网 Node 镜像和 npm registry，并从内网镜像取得本脚本。
 模型 API 与 Harness 子进程直连，不继承下载代理。
@@ -169,7 +177,7 @@ npm 路径只固定 Harness 顶层版本，不同时间首次安装仍可能解�
 ```bash
 bash -n connect.sh
 node --test test/*
-bash release.sh v1.2.1
+bash release.sh v1.3.0
 ```
 
 源码发布包包含安装器、文档、测试、打包脚本和许可证。可选运行包额外包含已安装的

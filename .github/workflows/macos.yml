@@ -21,9 +21,14 @@ jobs:
           node-version: 24.15.0
           cache: npm
           cache-dependency-path: macapp/package-lock.json
-      - run: bash -n connect.sh && bash -n install-macos.sh && node --test test/*
+      - run: bash -n connect.sh && bash -n install-macos.sh && bash -n prepare-desktop-runtime.sh && node --test test/*
       - run: npm ci
         working-directory: macapp
+      - run: bash prepare-desktop-runtime.sh
+      - name: Test the full desktop UI with real SSH authentication
+        run: node test-support/desktop-ui.cjs macapp/node_modules/.bin/electron macapp
+        env:
+          HARNESS_UI_REPORT: ${{ runner.temp }}/source-ui.json
       - run: npx electron . --smoke-test
         working-directory: macapp
       - run: npx electron-builder --mac --${{ matrix.arch }} --publish never
@@ -33,20 +38,33 @@ jobs:
       - name: Verify and launch the packaged app
         run: |
           python3 - <<'PY'
-          import plistlib, subprocess
+          import json, plistlib, subprocess
           from pathlib import Path
           apps = list(Path('dist/macapp').glob('*/*.app'))
           assert len(apps) == 1, apps
           app = apps[0]
           subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
           info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
-          subprocess.run([str(app / 'Contents/MacOS' / info['CFBundleExecutable']), '--smoke-test'], check=True, timeout=40)
+          runtime = app / 'Contents/Resources/runtime'
+          assert json.loads((runtime / 'BUNDLE.json').read_text())['platform'] == 'darwin'
+          subprocess.run(['node', 'test-support/desktop-ui.cjs', str(app / 'Contents/MacOS' / info['CFBundleExecutable'])], check=True, timeout=130)
+          subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
           assert b'--remote-ssh' in (app / 'Contents/Resources/connect.sh').read_bytes()
           PY
+        env:
+          HARNESS_UI_CAPTURE: ${{ runner.temp }}/remote-servers.png
+          HARNESS_UI_REPORT: ${{ runner.temp }}/packaged-ui.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UI-evidence-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/source-ui.json
+            ${{ runner.temp }}/packaged-ui.json
+            ${{ runner.temp }}/remote-servers.png
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: Harness-Connect-${{ matrix.arch }}
           path: |
-            dist/macapp/*.dmg
             dist/macapp/*.zip
           if-no-files-found: error

@@ -1,2 +1,4 @@
 dist/
 macapp/node_modules/
+macapp/runtime
+macapp/.runtime.*/

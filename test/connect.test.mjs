@@ -34,6 +34,7 @@ async function fixture(t, models = [{id: 'demo', max_model_len: 65536}], badBund
     NO_PROXY: '127.0.0.1', no_proxy: '127.0.0.1',
     HTTP_PROXY: 'http://127.0.0.1:1', HTTPS_PROXY: 'http://127.0.0.1:1'};
   delete env.DSH_CONTEXT_WINDOW; delete env.DSH_MAX_TOKENS;
+  delete env.DSH_BUNDLED_RUNTIME;
   return {data, endpoint, env, run: args => exec('bash', [script, endpoint, ...args], {env, timeout: 15000})};
 }
 
@@ -183,6 +184,26 @@ test('reuses shared CLI runtime when the App uses a different data directory', a
   const result = await f.run(['--install-only']);
   assert.match(result.stderr, /Reusing compatible local dsh/);
   assert.ok(!(await readdir(f.data)).includes('runtime'));
+});
+
+test('desktop bundle uses shipped Node and Harness with no runtime download', async t => {
+  const f=await fixture(t);await rm(join(f.data,'runtime'),{recursive:true});
+  const root=join(f.data,'desktop-runtime');await mkdir(join(root,'node/bin'),{recursive:true});
+  await symlink(process.execPath,join(root,'node/bin/node'));
+  await symlink(join(dirname(process.execPath),'npm'),join(root,'node/bin/npm'));
+  const bin=join(root,'harness/node_modules/.bin');await mkdir(bin,{recursive:true});
+  await writeFile(join(bin,'dsh'),'#!/bin/sh\necho 0.2.1-rc.2\n',{mode:0o755});
+  const pnpm=join(root,'pnpm/node_modules/.bin');await mkdir(pnpm,{recursive:true});
+  await writeFile(join(pnpm,'pnpm'),'#!/bin/sh\nexit 91\n',{mode:0o755});
+  const manifest={schema:1,platform:process.platform,arch:process.arch,node:process.versions.node,nodeAbi:process.versions.modules,harness:'0.2.1-rc.2'};
+  await writeFile(join(root,'BUNDLE.json'),JSON.stringify(manifest));f.env.DSH_BUNDLED_RUNTIME=root;
+  const result=await f.run(['--install-only']);assert.match(result.stderr,/no dependency downloads/);
+  assert.ok(!(await readdir(f.data)).includes('runtime'));
+  await mkdir(join(root,'web-profile'));await writeFile(join(root,'web-profile/package.json'),'{}');
+  for(let attempt=0;attempt<2;attempt++)await assert.rejects(f.run(['--remote-ssh','--install-only']),error=>
+    /SSH profile is incomplete or incompatible/.test(error.stderr)&&!/Installing .*plugins|Downloading /.test(error.stderr));
+  await writeFile(join(root,'BUNDLE.json'),JSON.stringify({...manifest,platform:'wrong'}));
+  await assert.rejects(f.run(['--install-only']),error=>/platform\/version mismatch/.test(error.stderr));
 });
 
 test('reuses the shared Node installation when Node on PATH is incompatible', async t => {
