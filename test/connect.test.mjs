@@ -69,6 +69,52 @@ test('default forwards Web flags and run mode selects headless', async t => {
   assert.equal(task.stdout, 'headless\nExplain README.md\n');
 });
 
+test('SSH UI installs pinned plugins once, orders bundles, and isolates its profile', async t => {
+  const f = await fixture(t);
+  const bin = join(f.data, 'runtime/dsh-0.2.1-rc.2/node_modules/.bin');
+  await writeFile(join(bin, 'dsh'), `#!/bin/sh
+if [ "$1" = plugin ]; then
+  echo "$@" >> "$DSH_DATA_DIR/plugin-calls"
+  mkdir -p "$DSH_HOME/profiles/web/node_modules/dsh-better-sidebar" "$DSH_HOME/profiles/web/node_modules/@zhangfengshun/dsh-remote-ssh"
+  echo '{"version":"0.28.0"}' > "$DSH_HOME/profiles/web/node_modules/dsh-better-sidebar/package.json"
+  echo '{"version":"2.4.36"}' > "$DSH_HOME/profiles/web/node_modules/@zhangfengshun/dsh-remote-ssh/package.json"
+  echo '{"dsh":{"profile":{"bundles":["@deepseek-ai/dsh-base","@zhangfengshun/dsh-remote-ssh","dsh-better-sidebar"]}}}' > "$DSH_HOME/profiles/web/package.json"
+fi
+`, {mode: 0o755});
+  await writeFile(join(bin, 'pnpm'), '#!/bin/sh\nexit 0\n', {mode: 0o755});
+  f.env.PATH = bin + ':' + f.env.PATH;
+  await f.run(['--install-only']);
+  await f.run(['--remote-ssh', '--install-only']);
+  const {stderr} = await f.run(['--remote-ssh', '--install-only']);
+  assert.match(stderr, /Settings > Remote SSH/);
+  const dirs = await readdir(join(f.data, 'connections'));
+  assert.equal(dirs.length, 2);
+  const calls = await readFile(join(f.data, 'plugin-calls'), 'utf8');
+  assert.equal(calls.trim().split('\n').length, 1);
+  assert.match(calls, /dsh-better-sidebar@0.28.0/);
+  assert.match(calls, /@zhangfengshun\/dsh-remote-ssh@2.4.36/);
+  for (const dir of dirs) {
+    try {
+      const profile = JSON.parse(await readFile(join(f.data, 'connections', dir, 'profiles/web/package.json'), 'utf8'));
+      assert.deepEqual(profile.dsh.profile.bundles.slice(-2), ['dsh-better-sidebar', '@zhangfengshun/dsh-remote-ssh']);
+      const patch = JSON.parse(await readFile(join(f.data, 'connections', dir, 'cordis.patch.yml'), 'utf8'));
+      const terminal = patch.find(p => p.id === 'terminal-controller').config.shell.args[0];
+      await exec(process.execPath, ['--check', terminal]);
+      const cwd = join(f.data, 'password-workspace');
+      await mkdir(cwd);
+      await writeFile(join(cwd, '.remote-ssh.json'), JSON.stringify({host:'example.invalid', user:'demo', remotePath:"/tmp/a b/'$(touch nope)", keyPath:''}));
+      await writeFile(join(bin, 'ssh'), '#!/usr/bin/env node\nconsole.log(JSON.stringify(process.argv.slice(2)));\n', {mode: 0o755});
+      const opened = await exec(process.execPath, [terminal], {env:f.env, cwd});
+      const args = JSON.parse(opened.stdout);
+      assert.ok(args.includes('demo@example.invalid'));
+      assert.ok(!args.includes('-i'));
+      assert.match(args.at(-1), /^cd -- '/);
+      assert.match(args.at(-1), /'\\''\$\(touch nope\)'/);
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  await assert.rejects(f.run(['--remote-ssh', '--run', 'task']), error => /requires web/.test(error.stderr));
+});
+
 test('rejects invalid model, credentials in URL, and invalid output budget', async t => {
   const f = await fixture(t);
   await assert.rejects(f.run(['--model', 'missing', '--install-only']), /Command failed/);

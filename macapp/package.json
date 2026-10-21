@@ -1,0 +1,30 @@
+{
+  "name": "deepseek-harness-connect-desktop",
+  "version": "1.2.0",
+  "private": true,
+  "description": "Local DeepSeek Harness with configurable model endpoints and remote SSH workspaces",
+  "author": "YLlllllllllll",
+  "license": "MIT",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "45.0.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "io.github.ylllllllllll.harness-connect",
+    "productName": "Harness Connect",
+    "files": ["main.cjs", "preload.cjs", "setup.html", "setup.cjs", "desktop.cjs"],
+    "extraResources": [{"from": "../connect.sh", "to": "connect.sh"}],
+    "directories": {"output": "../dist/macapp"},
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "identity": null,
+      "target": ["dmg", "zip"]
+    },
+    "artifactName": "Harness-Connect-${version}-${arch}.${ext}"
+  }
+}

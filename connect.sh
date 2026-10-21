@@ -13,6 +13,7 @@ ENDPOINT       OpenAI-compatible API root, with or without /v1; bracket IPv6 lit
 --check        Test chat and streamed tool-call round trip, then exit; no agent runs.
 --install-only Install and configure, then exit without inference or a listener.
 --run TASK     Run one Harness headless task in the current working directory.
+--remote-ssh   Add the remote connections, files and terminal UI (web/install-only).
 --help         Show this help.
 
 Default: start the Web UI on 127.0.0.1:3080. Extra arguments go to dsh web,
@@ -33,10 +34,12 @@ ENDPOINT=$1; shift
 MODE=web
 MODEL=${VLLM_MODEL:-}
 TASK=
+REMOTE_SSH=0
 WEB_ARGS=()
 while (($#)); do
   case "$1" in
     --model) [[ $# -ge 2 && -n $2 ]] || die '--model needs an ID'; MODEL=$2; shift 2 ;;
+    --remote-ssh) REMOTE_SSH=1; shift ;;
     --check|--install-only|--run)
       [[ $MODE == web ]] || die 'Choose only one of --check, --install-only, --run'
       case "$1" in
@@ -49,6 +52,7 @@ while (($#)); do
   esac
 done
 [[ $MODE == web || ${#WEB_ARGS[@]} -eq 0 ]] || die 'Web options require Web mode'
+[[ $REMOTE_SSH == 0 || $MODE == web || $MODE == install-only ]] || die '--remote-ssh requires web or --install-only'
 case "$ENDPOINT" in http://*|https://*) ;; *) die 'ENDPOINT must start with http:// or https://' ;; esac
 case "$(uname -s)" in Linux) PLATFORM=linux ;; Darwin) PLATFORM=darwin ;; *) die 'Supported OS: Linux or macOS' ;; esac
 case "$(uname -m)" in x86_64|amd64) ARCH=x64 ;; aarch64|arm64) ARCH=arm64 ;; *) die 'Supported architectures: x64, arm64' ;; esac
@@ -56,6 +60,7 @@ DATA=${DSH_DATA_DIR:-"${XDG_DATA_HOME:-$HOME/.local/share}/deepseek-harness-conn
 mkdir -p "$DATA"
 DATA=$(cd "$DATA" && pwd)
 VERSION=${DSH_VERSION:-0.2.1-rc.2}
+[[ $REMOTE_SSH == 0 || $VERSION == 0.2.1-rc.2 ]] || die '--remote-ssh currently requires dsh 0.2.1-rc.2'
 NODE_VERSION=${DSH_NODE_VERSION:-24.15.0}
 METHOD=${DSH_INSTALL_METHOD:-auto}
 case "$METHOD" in auto|npm|prebuilt) ;; *) die 'DSH_INSTALL_METHOD must be auto, npm, or prebuilt' ;; esac
@@ -201,11 +206,11 @@ direct() {
 export VLLM_API_KEY=${VLLM_API_KEY:-internal-no-auth}
 export DSH_TELEMETRY_DISABLED=1
 status '[3/4] Connecting to endpoint and discovering models'
-CONNECTION=$(direct node --input-type=module - "$ENDPOINT" "$MODEL" "$DATA" "$MODE" <<'JS'
+CONNECTION=$(direct node --input-type=module - "$ENDPOINT" "$MODEL" "$DATA" "$MODE" "$REMOTE_SSH" <<'JS'
 import { mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
-const [endpoint, requestedModel, data, mode] = process.argv.slice(2);
+const [endpoint, requestedModel, data, mode, remoteSsh] = process.argv.slice(2);
 try {
   const url = new URL(endpoint);
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash)
@@ -233,7 +238,8 @@ try {
   const maxTokens = Number(process.env.DSH_MAX_TOKENS || Math.min(4096, Math.floor(context / 4)));
   if (!Number.isSafeInteger(context) || !Number.isSafeInteger(maxTokens) || maxTokens <= 0 || maxTokens >= context)
     throw new Error('Require integer 0 < DSH_MAX_TOKENS < DSH_CONTEXT_WINDOW');
-  const id = createHash('sha256').update(JSON.stringify([base, model])).digest('hex').slice(0, 20);
+  const identity = remoteSsh === '1' ? [base, model, 'remote-ssh'] : [base, model];
+  const id = createHash('sha256').update(JSON.stringify(identity)).digest('hex').slice(0, 20);
   const state = join(data, 'connections', id);
   mkdirSync(state, {recursive: true, mode: 0o700});
   const patch = [
@@ -246,6 +252,37 @@ try {
     }}}},
     {id: 'agent-default-model', config: {provider: 'self-hosted', model}},
   ];
+  if (remoteSsh === '1') {
+    // Keep the terminal remote even when keyPath is empty (password/ssh-agent).
+    // The upstream wrapper otherwise falls back to a local shell in that case.
+    const terminal = join(state, 'remote-shell.cjs');
+    writeFileSync(terminal, String.raw`
+const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+const {spawn} = require('node:child_process');
+let metadata;
+try { metadata = JSON.parse(fs.readFileSync(path.join(process.cwd(), '.remote-ssh.json'), 'utf8')); }
+catch (error) { if (error.code !== 'ENOENT') { console.error('Invalid remote workspace metadata'); process.exit(1); } }
+let command, args;
+if (metadata) {
+  if (!metadata.host || !metadata.user) { console.error('Missing SSH host or user'); process.exit(1); }
+  command = 'ssh';
+  args = ['-tt', '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ClearAllForwardings=yes', '-p', String(metadata.port || 22)];
+  if (metadata.proxyJump) args.push('-J', metadata.proxyJump);
+  if (metadata.keyPath) {
+    const key = metadata.keyPath.startsWith('~/') ? path.join(os.homedir(), metadata.keyPath.slice(2)) : metadata.keyPath;
+    args.push('-i', key);
+  }
+  const quote = text => "'" + text.replace(/'/g, "'\\''") + "'";
+  const remote = String(metadata.remotePath || '~');
+  const directory = remote === '~' ? '"$HOME"' : remote.startsWith('~/') ? '"$HOME"/' + quote(remote.slice(2)) : quote(remote);
+  args.push('--', metadata.user + '@' + metadata.host, 'cd -- ' + directory + ' && exec "' + '$' + '{SHELL:-/bin/sh}" -l');
+} else { command = process.env.SHELL || '/bin/bash'; args = ['-l']; }
+const child = spawn(command, args, {stdio: 'inherit'});
+child.on('error', () => { console.error('Unable to start terminal'); process.exit(1); });
+child.on('exit', code => process.exit(code ?? 1));
+`, {mode: 0o600});
+    patch.push({id: 'terminal-controller', config: {shell: {path: process.execPath, name: 'Remote SSH / Local', args: [terminal]}}});
+  }
   const pending = join(state, `.patch-${randomBytes(8).toString('hex')}`);
   writeFileSync(pending, JSON.stringify(patch, null, 2) + '\n', {mode: 0o600});
   renameSync(pending, join(state, 'cordis.patch.yml'));
@@ -305,6 +342,75 @@ try {
 JS
 )
 export DSH_HOME="$CONNECTION"
+if [[ $REMOTE_SSH == 1 ]]; then
+  command -v ssh >/dev/null || die 'Remote SSH requires an OpenSSH client'
+  # The plugin expects sshpass, which macOS does not ship. Use OpenSSH's native
+  # askpass protocol; credentials are passed in memory, never written here.
+  PASSWORD_HELPER="$DATA/tools/ssh-password"
+  mkdir -p "$PASSWORD_HELPER"
+  cat > "$PASSWORD_HELPER/askpass" <<'SH'
+#!/bin/sh
+printf '%s\n' "$HARNESS_SSH_PASSWORD"
+SH
+  cat > "$PASSWORD_HELPER/sshpass" <<'JS'
+#!/usr/bin/env node
+const {spawn} = require('node:child_process');
+const {join} = require('node:path');
+const args = process.argv.slice(2);
+if (args[0] !== '-p' || args.length < 3) {
+  console.error('Harness password helper expects sshpass -p PASSWORD ssh ...');
+  process.exit(2);
+}
+const password = args[1], command = args[2];
+const child = spawn(command, args.slice(3), {stdio: 'inherit', env: {
+  ...process.env, HARNESS_SSH_PASSWORD: password, SSH_ASKPASS_REQUIRE: 'force',
+  SSH_ASKPASS: join(__dirname, 'askpass'), DISPLAY: process.env.DISPLAY || ':0',
+}});
+child.on('error', () => { console.error('Unable to start SSH client'); process.exit(1); });
+child.on('exit', code => process.exit(code ?? 1));
+JS
+  chmod 700 "$PASSWORD_HELPER/askpass" "$PASSWORD_HELPER/sshpass"
+  export PATH="$PASSWORD_HELPER:$PATH"
+  # Use the official profile package manager. No changes to the shared runtime.
+  if ! command -v pnpm >/dev/null; then
+    PNPM_HOME="$DATA/tools/pnpm-11.0.8"
+    if [[ ! -x $PNPM_HOME/node_modules/.bin/pnpm ]]; then
+      status 'Installing pnpm 11.0.8 for SSH plugins'
+      npm install --prefix "$PNPM_HOME" --no-audit --no-fund --ignore-scripts \
+        --registry "${DSH_NPM_REGISTRY:-https://registry.npmjs.org}" pnpm@11.0.8 >&2
+    fi
+    export PATH="$PNPM_HOME/node_modules/.bin:$PATH"
+  fi
+  PLUGINS="$CONNECTION/profiles/web"
+  if ! node - "$PLUGINS" <<'JS'
+const fs = require('node:fs'), path = require('node:path');
+try {
+  const root = process.argv[2];
+  for (const [name, version] of [['dsh-better-sidebar', '0.28.0'], ['@zhangfengshun/dsh-remote-ssh', '2.4.36']]) {
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, 'node_modules', name, 'package.json')));
+    if (pkg.version !== version) process.exit(1);
+  }
+} catch { process.exit(1); }
+JS
+  then
+    status 'Installing remote files, terminal and SSH settings plugins (first use only)'
+    "$CLI" plugin --profile web add --save-exact dsh-better-sidebar@0.28.0 \
+      @zhangfengshun/dsh-remote-ssh@2.4.36 \
+      --registry="${DSH_NPM_REGISTRY:-https://registry.npmjs.org}" --reporter=append-only >&2
+  fi
+  # pnpm reconciliation may sort bundles alphabetically; SSH must follow sidebar.
+  node - "$PLUGINS/package.json" <<'JS'
+const fs = require('node:fs');
+const file = process.argv[2], pkg = JSON.parse(fs.readFileSync(file));
+const names = ['dsh-better-sidebar', '@zhangfengshun/dsh-remote-ssh'];
+pkg.dsh.profile.bundles = [...pkg.dsh.profile.bundles.filter(x => !names.includes(x)), ...names];
+const pending = file + '.connect-' + process.pid;
+fs.writeFileSync(pending, JSON.stringify(pkg, null, 2) + '\n', {mode: 0o600});
+fs.renameSync(pending, file);
+JS
+  status 'Remote SSH ready: Settings > Remote SSH; add your host and password or key'
+  status 'Agent runs locally; closing this app interrupts agent work. Password terminals prompt again inside the terminal.'
+fi
 case "$MODE" in
   check|install-only) status '[4/4] Ready'; printf 'Ready. Configuration: %s\n' "$DSH_HOME" ;;
   run) status '[4/4] Starting headless task'; direct "$CLI" headless "$TASK" ;;

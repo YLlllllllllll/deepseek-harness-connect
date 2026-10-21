@@ -3,7 +3,7 @@
 用一条命令安装 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)，连接你自己的 OpenAI-compatible endpoint。
 
 ```bash
-curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.1.0/connect.sh | bash -s -- 'http://localhost:8000/v1'
+curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.2.0/connect.sh | bash -s -- 'http://localhost:8000/v1'
 ```
 
 把最后一个参数替换为你的 endpoint。默认启动 Web UI；首次安装，后续复用。
@@ -26,7 +26,7 @@ Harness 默认固定为 `0.2.1-rc.2`。
 下载一次，之后可以直接运行：
 
 ```bash
-curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.1.0/connect.sh -o connect.sh
+curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.2.0/connect.sh -o connect.sh
 bash connect.sh 'http://localhost:8000/v1'
 ```
 
@@ -70,6 +70,49 @@ bash connect.sh 'http://localhost:8000/v1'
 服务应已具备正确的 chat template、自动工具选择和模型对应的 tool-call parser。
 脚本不启动、不修改推理服务。
 
+## macOS App 与远程 SSH
+
+[下载 macOS 安装包](https://github.com/YLlllllllllll/deepseek-harness-connect/releases/tag/v1.2.0)：
+Apple Silicon 选择 `arm64.dmg`，Intel 选择 `x64.dmg`，拖入 Applications 后打开。
+这是独立 Electron 窗口。社区构建未做 Apple Developer ID 签名或公证；
+macOS 若拦截，可从系统设置的“隐私与安全性”确认打开，不需要关闭系统安全功能。
+
+1. 首屏填写任意 OpenAI-compatible endpoint；多个模型时填写模型 ID。
+2. 有下载代理时展开高级设置填写代理地址。首次安装显示进度，之后复用本地缓存。
+3. 进入后打开 **Settings → Remote SSH**，填写主机、端口、用户名、密码或私钥；可添加多个连接，也可导入 `~/.ssh/config`。
+4. 点击连接测试，再从 **Add Workspace → Select Remote Directory** 选择远程项目。文件侧栏直接操作远端，终端进入所选目录。密码终端会再次提示输入密码；命令和文件工具使用设置中保存的密码。
+
+安装包不内置 endpoint、SSH 主机或密码。模型 API key 仅保留在本次服务进程的环境中，
+App 不保存它；endpoint、模型 ID 和下载代理保存于 App 的用户数据目录。
+SSH 连接及密码由社区插件保存在本机 DSH profile 中；插件把密码标记为 secret，
+但这不代表 Keychain 加密，请按凭据文件保护该目录。插件的镜像目录和 shell helper
+仍位于 `~/.dsh/remote-workspaces` 与 `~/.dsh/remote-ssh`，不受 `DSH_DATA_DIR` 控制。
+
+**这一版实现本地 agent + 远程开发**。关闭 App 或本地离线会中断 agent，
+尚未实现“远程完整 agent 常驻、本地断开后继续推理、重连恢复”的模式。
+独立提交到远端作业系统的任务有自己的生命周期，和本地 agent 会话不同。
+
+命令行也可启用相同界面：
+
+```bash
+bash connect.sh 'http://localhost:8000/v1' --remote-ssh
+```
+
+该选项固定 DSH `0.2.1-rc.2`、`dsh-better-sidebar@0.28.0` 和
+`@zhangfengshun/dsh-remote-ssh@2.4.36`，通过官方 plugin 命令安装，
+按侧栏→SSH 顺序加载。远程模式使用独立连接 profile；原有非 SSH profile 的会话不迁移。
+macOS 无需额外安装 sshpass：连接工具使用 OpenSSH 原生 askpass。
+默认仅监听本机回环地址，App 通过启动时的 token 完成认证。
+
+SSH 文件/命令由 [dsh-remote-ssh](https://github.com/ZhangFengshun/dsh-remote-ssh)
+和 [dsh-better-sidebar](https://www.npmjs.com/package/dsh-better-sidebar) 提供。
+可提供远程完整 DSH 的 [dsh-ssh-workspace](https://github.com/sincerity711/dsh-ssh-workspace)
+目前声明绑定 `0.2.0-rc.2`，本项目尚未集成或验证它。
+
+App 构建：`cd macapp && npm ci && npm run dist`（macOS）。
+仓库的 `macOS app` Actions 工作流分别构建 Apple Silicon 和 Intel，
+检查连接表单、preload 与 IPC 后生成 DMG/ZIP。源码中不含 Apple 签名凭据。
+
 ## 网络与安装位置
 
 运行机器需要能访问 endpoint。首次安装还需要访问 GitHub、Node.js 和 npm 下载源，
@@ -107,8 +150,8 @@ npm 路径只固定 Harness 顶层版本，不同时间首次安装仍可能解�
 
 ```bash
 bash -n connect.sh
-node --test test/connect.test.mjs
-bash release.sh v1.1.0
+node --test test/*
+bash release.sh v1.2.0
 ```
 
 源码发布包包含安装器、文档、测试、打包脚本和许可证。可选运行包额外包含已安装的

@@ -1,0 +1,39 @@
+name: macOS app
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.15.0
+          cache: npm
+          cache-dependency-path: macapp/package-lock.json
+      - run: bash -n connect.sh && node --test test/*
+      - run: npm ci
+        working-directory: macapp
+      - run: npx electron . --smoke-test
+        working-directory: macapp
+      - run: npx electron-builder --mac --${{ matrix.arch }} --publish never
+        working-directory: macapp
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Harness-Connect-${{ matrix.arch }}
+          path: |
+            dist/macapp/*.dmg
+            dist/macapp/*.zip
+          if-no-files-found: error

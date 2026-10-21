@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'none'">
+<title>Harness Connect</title>
+<style>
+  *{box-sizing:border-box}body{font:15px -apple-system,BlinkMacSystemFont,sans-serif;background:#f6f7f9;color:#17202a;margin:0;padding:32px}h1{font-size:27px;margin:0 0 10px}p{line-height:1.55;color:#526070}label{display:block;margin:16px 0 6px;font-weight:600}input{width:100%;padding:11px;border:1px solid #cbd3dc;border-radius:8px;font:inherit}button{margin-top:22px;background:#2563eb;color:white;border:0;border-radius:8px;padding:12px 20px;font:inherit;cursor:pointer}button:disabled{opacity:.5}small{display:block;color:#526070;line-height:1.5;margin-top:8px}pre{font:12px ui-monospace,monospace;white-space:pre-wrap;overflow:auto;height:110px;padding:12px;background:white;border:1px solid #dbe1e8;border-radius:8px}details{margin-top:14px}
+</style>
+<h1>Harness Connect</h1>
+<p>本地 App，远程工作区。先连接模型，再在 <b>Settings → Remote SSH</b> 中填写 SSH 主机、用户名、密码或私钥。</p>
+<form id="form">
+  <label for="endpoint">模型 Endpoint</label><input id="endpoint" type="url" placeholder="http://your-server:8000/v1" required>
+  <details><summary>模型、API key 与下载代理（可选）</summary>
+    <label for="model">模型 ID</label><input id="model" placeholder="单模型 endpoint 会自动识别">
+    <label for="apiKey">API key</label><input id="apiKey" type="password" autocomplete="off" placeholder="无鉴权服务留空">
+    <small>API key 仅用于本次启动，不保存到磁盘。</small>
+    <label for="proxy">下载代理</label><input id="proxy" type="url" placeholder="http://proxy.example:8118">
+    <small>仅用于首次安装时的公网下载；模型 API 与 SSH 直连。</small>
+  </details>
+  <button id="start">连接并打开</button>
+</form>
+<small>运行时和 agent 在本地；本地退出或断网后，agent 无法继续执行。使用密码认证时，交互终端会再次提示输入密码。SSH 连接信息由社区插件保存在本机配置中。</small>
+<pre id="progress" aria-live="polite">等待连接。</pre>
+<script src="setup.cjs"></script>
+</html>
