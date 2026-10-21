@@ -76,9 +76,24 @@ test('SSH UI installs pinned plugins once, orders bundles, and isolates its prof
 if [ "$1" = plugin ]; then
   echo "$@" >> "$DSH_DATA_DIR/plugin-calls"
   mkdir -p "$DSH_HOME/profiles/web/node_modules/dsh-better-sidebar" "$DSH_HOME/profiles/web/node_modules/@zhangfengshun/dsh-remote-ssh"
+  mkdir -p "$DSH_HOME/profiles/web/node_modules/@zhangfengshun/dsh-remote-ssh/lib"
   echo '{"version":"0.28.0"}' > "$DSH_HOME/profiles/web/node_modules/dsh-better-sidebar/package.json"
   echo '{"version":"2.4.36"}' > "$DSH_HOME/profiles/web/node_modules/@zhangfengshun/dsh-remote-ssh/package.json"
   echo '{"dsh":{"profile":{"bundles":["@deepseek-ai/dsh-base","@zhangfengshun/dsh-remote-ssh","dsh-better-sidebar"]}}}' > "$DSH_HOME/profiles/web/package.json"
+  cat > "$DSH_HOME/profiles/web/node_modules/@zhangfengshun/dsh-remote-ssh/lib/index.js" <<'PLUGIN'
+function internal(svc) {return svc.describe({ redactSecrets: true });}
+function fixture() {
+  const api = {
+    listProfiles: () => ({profiles: settingsFace.read().profiles}),
+    saveProfile: () => {
+      const existing = {}, p = {}, record = {password: p.password || "",}, profiles = [];
+      return { ok: true, id: record.id, profiles: profiles };
+    },
+    deleteProfile: () => {const profiles = [], workspaces = []; return { ok: true, profiles: profiles, workspaces: workspaces };}
+  };
+  return {api, tool: () => ({profiles: settingsFace.read().profiles})};
+}
+PLUGIN
 fi
 `, {mode: 0o755});
   await writeFile(join(bin, 'pnpm'), '#!/bin/sh\nexit 0\n', {mode: 0o755});
@@ -97,6 +112,10 @@ fi
     try {
       const profile = JSON.parse(await readFile(join(f.data, 'connections', dir, 'profiles/web/package.json'), 'utf8'));
       assert.deepEqual(profile.dsh.profile.bundles.slice(-2), ['dsh-better-sidebar', '@zhangfengshun/dsh-remote-ssh']);
+      const patched = await readFile(join(f.data, 'connections', dir, 'profiles/web/node_modules/@zhangfengshun/dsh-remote-ssh/lib/index.js'), 'utf8');
+      assert.match(patched, /^\/\/ harness-connect-password-v1/);
+      assert.match(patched, /redactSecrets: false/);
+      assert.equal(patched.match(/profiles: publicProfiles/g).length, 4);
       const patch = JSON.parse(await readFile(join(f.data, 'connections', dir, 'cordis.patch.yml'), 'utf8'));
       const terminal = patch.find(p => p.id === 'terminal-controller').config.shell.args[0];
       await exec(process.execPath, ['--check', terminal]);

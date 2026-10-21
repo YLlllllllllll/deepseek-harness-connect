@@ -408,6 +408,28 @@ const pending = file + '.connect-' + process.pid;
 fs.writeFileSync(pending, JSON.stringify(pkg, null, 2) + '\n', {mode: 0o600});
 fs.renameSync(pending, file);
 JS
+  # 2.4.36 reads redacted settings for SSH authentication. Keep secrets available
+  # internally and redact every profile response sent to the UI or model.
+  node - "$PLUGINS/node_modules/@zhangfengshun/dsh-remote-ssh/lib/index.js" <<'JS'
+const fs = require('node:fs');
+const file = fs.realpathSync(process.argv[2]);
+let source = fs.readFileSync(file, 'utf8');
+const marker = '// harness-connect-password-v1\n';
+if (source.startsWith(marker)) process.exit(0);
+const replace = (before, after, count = 1) => {
+  if (source.split(before).length - 1 !== count) throw new Error('SSH password compatibility patch does not match the pinned plugin');
+  source = source.split(before).join(after);
+};
+replace('svc.describe({ redactSecrets: true })', 'svc.describe({ redactSecrets: false })');
+replace('  const api = {', '  const publicProfiles = profiles => profiles.map(({password, ...profile}) => ({...profile, password: ""}));\n  const api = {');
+replace('password: p.password || "",', 'password: p.password || (existing && p.authMethod !== "key" ? existing.password : "") || "",');
+replace('profiles: settingsFace.read().profiles', 'profiles: publicProfiles(settingsFace.read().profiles)', 2);
+replace('return { ok: true, id: record.id, profiles: profiles };', 'return { ok: true, id: record.id, profiles: publicProfiles(profiles) };');
+replace('return { ok: true, profiles: profiles, workspaces: workspaces };', 'return { ok: true, profiles: publicProfiles(profiles), workspaces: workspaces };');
+const pending = file + '.connect-' + process.pid;
+fs.writeFileSync(pending, marker + source, {mode: 0o600});
+fs.renameSync(pending, file);
+JS
   status 'Remote SSH ready: Settings > Remote SSH; add your host and password or key'
   status 'Agent runs locally; closing this app interrupts agent work. Password terminals prompt again inside the terminal.'
 fi

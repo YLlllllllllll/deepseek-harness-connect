@@ -102,6 +102,8 @@ bash connect.sh 'http://localhost:8000/v1' --remote-ssh
 `@zhangfengshun/dsh-remote-ssh@2.4.36`，通过官方 plugin 命令安装，
 按侧栏→SSH 顺序加载。远程模式使用独立连接 profile；原有非 SSH profile 的会话不迁移。
 macOS 无需额外安装 sshpass：连接工具使用 OpenSSH 原生 askpass。
+安装器对固定 SSH 插件应用局部兼容修复：内部认证读取真实密码，向界面和模型返回的
+连接列表仍然脱敏；编辑连接时留空密码会保留原密码。补丁不匹配则停止启动。
 默认仅监听本机回环地址，App 通过启动时的 token 完成认证。
 
 SSH 文件/命令由 [dsh-remote-ssh](https://github.com/ZhangFengshun/dsh-remote-ssh)
