@@ -3,7 +3,7 @@
 用一条命令安装 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)，连接你自己的 OpenAI-compatible endpoint。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.0.0/connect.sh | bash -s -- 'http://localhost:8000/v1'
+curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.0.1/connect.sh | bash -s -- 'http://localhost:8000/v1'
 ```
 
 把最后一个参数替换为你的 endpoint。默认启动 Web UI；首次安装，后续复用。
@@ -11,12 +11,16 @@ curl -fsSL https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-conn
 有合适的 Node.js 时直接复用，否则在用户目录安装 Node.js 24.15.0 并核对 SHA-256。
 Harness 默认固定为 `0.2.1-rc.2`。
 
+安装时显示 `[1/4] Node.js → [2/4] Harness → [3/4] endpoint → [4/4] Web UI`。
+脚本和 Node 文件下载显示真实百分比；npm 不提供总下载大小，因此安装阶段每 5 秒
+显示已耗时和完成的 HTTP/缓存操作数量。完整 npm 日志保存在安装目录的 `npm-install.log`。
+
 ## 使用
 
 下载一次，之后可以直接运行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.0.0/connect.sh -o connect.sh
+curl -fL --progress-bar https://raw.githubusercontent.com/YLlllllllllll/deepseek-harness-connect/v1.0.1/connect.sh -o connect.sh
 bash connect.sh 'http://localhost:8000/v1'
 ```
 
@@ -92,7 +96,7 @@ Node.js。此仓库的本机 live 验证覆盖 Linux x64；其他平台有安装
 ```bash
 bash -n connect.sh
 node --test test/connect.test.mjs
-bash release.sh v1.0.0
+bash release.sh v1.0.1
 ```
 
 发布包只包含安装器、文档、测试和许可证，不含 endpoint、API key、会话、node_modules

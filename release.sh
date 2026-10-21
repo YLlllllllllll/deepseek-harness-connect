@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-VERSION=${1:-v1.0.0}
+VERSION=${1:-v1.0.1}
 [[ $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Expected vMAJOR.MINOR.PATCH' >&2; exit 2; }
 mkdir -p "$ROOT/dist"
 NAME="deepseek-harness-connect-$VERSION.tar.gz"

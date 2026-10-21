@@ -73,3 +73,47 @@ test('rejects invalid model, credentials in URL, and invalid output budget', asy
   await assert.rejects(exec('bash', [script, f.endpoint.replace('http://', 'http://user:password@'), '--install-only'], {env: f.env}), error => /without credentials/.test(error.stderr));
   await assert.rejects(exec('bash', [script, f.endpoint, '--install-only'], {env: {...f.env, DSH_MAX_TOKENS: '999999'}}), error => /DSH_MAX_TOKENS/.test(error.stderr));
 });
+
+async function mockInstall(f, fail = false) {
+  await rm(join(f.data, 'runtime'), {recursive: true});
+  const bin = join(f.data, 'mock-bin');
+  await mkdir(bin);
+  await writeFile(join(bin, 'npm'), `#!/bin/sh
+prefix=
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --prefix ]; then prefix=$2; shift; fi
+  shift
+done
+echo 'npm http fetch GET 200 https://example.invalid/mock-package'
+sleep 1
+${fail ? "echo 'mock registry failure' >&2; exit 23" : `mkdir -p "$prefix/node_modules/.bin"
+printf '#!/bin/sh\\necho 0.2.1-rc.2\\n' > "$prefix/node_modules/.bin/dsh"
+chmod +x "$prefix/node_modules/.bin/dsh"
+echo 'added 1 mock package'`}
+`, {mode: 0o755});
+  f.env.PATH = bin + ':' + process.env.PATH;
+}
+
+test('fresh installation reports stages and elapsed progress and preserves its npm log', async t => {
+  const f = await fixture(t);
+  await mockInstall(f);
+  const {stderr} = await f.run(['--install-only']);
+  assert.match(stderr, /\[1\/4\].*Node/);
+  assert.match(stderr, /\[2\/4\] npm: \d+s elapsed; \d+ HTTP\/cache operations completed/);
+  assert.match(stderr, /\[2\/4\] npm completed/);
+  assert.match(stderr, /\[3\/4\].*discovering models/);
+  assert.match(stderr, /\[4\/4\] Ready/);
+  const log = await readFile(join(f.data, 'runtime/dsh-0.2.1-rc.2/npm-install.log'), 'utf8');
+  assert.match(log, /added 1 mock package/);
+});
+
+test('npm failures print their log and release the installer lock', async t => {
+  const f = await fixture(t);
+  await mockInstall(f, true);
+  await assert.rejects(f.run(['--install-only']), error => {
+    assert.match(error.stderr, /mock registry failure/);
+    assert.match(error.stderr, /npm install failed \(exit 23\)/);
+    return true;
+  });
+  assert.deepEqual(await readdir(join(f.data, 'runtime')), []);
+});

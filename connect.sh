@@ -25,6 +25,7 @@ traffic is direct. No proxy, endpoint, or secret is built into this script.
 HELP
 }
 die() { printf 'connect: %s\n' "$*" >&2; exit 1; }
+status() { printf 'connect: %s\n' "$*" >&2; }
 if [[ ${1:-} == --help || ${1:-} == -h ]]; then usage; exit 0; fi
 [[ $# -gt 0 && -n $1 ]] || { usage >&2; exit 2; }
 ENDPOINT=$1; shift
@@ -58,7 +59,12 @@ NODE_VERSION=${DSH_NODE_VERSION:-24.15.0}
 [[ $VERSION =~ ^[0-9][0-9A-Za-z.+-]*$ && $NODE_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die 'Invalid version'
 STAGE=
 LOCK=
+INSTALL_PID=
 cleanup() {
+  if [[ -n $INSTALL_PID ]]; then
+    kill -TERM "$INSTALL_PID" 2>/dev/null || true
+    wait "$INSTALL_PID" 2>/dev/null || true
+  fi
   if [[ -n $STAGE && -d $STAGE ]]; then rm -rf -- "$STAGE"; fi
   if [[ -n $LOCK && -d $LOCK ]]; then rmdir "$LOCK" 2>/dev/null || true; fi
 }
@@ -67,12 +73,14 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 download() {
   command -v curl >/dev/null || die 'Install curl first'
-  curl --fail --location --retry 2 --connect-timeout 15 --max-time 300 "$1" -o "$2"
+  status "Downloading ${1##*/}"
+  curl --fail --location --progress-bar --show-error --retry 2 --connect-timeout 15 --max-time 300 "$1" -o "$2"
 }
 valid_node() {
   command -v node >/dev/null && command -v npm >/dev/null &&
     node -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit(a>=24||(a===22&&b>=19)?0:1)' 2>/dev/null
 }
+status "[1/4] Checking Node.js ($PLATFORM/$ARCH)"
 if ! valid_node; then
   NODE_HOME="$DATA/tools/node-v$NODE_VERSION-$PLATFORM-$ARCH"
   if [[ ! -x $NODE_HOME/bin/node ]]; then
@@ -90,6 +98,7 @@ if ! valid_node; then
     elif command -v shasum >/dev/null; then ACTUAL=$(shasum -a 256 "$STAGE/$FILE");
     else die 'sha256sum or shasum is required'; fi
     [[ ${ACTUAL%% *} == "$EXPECTED" ]] || die 'Node archive checksum mismatch'
+    status '[1/4] Checksum verified; extracting Node.js'
     mkdir "$STAGE/node"
     tar -xzf "$STAGE/$FILE" --strip-components=1 -C "$STAGE/node"
     "$STAGE/node/bin/node" --version >/dev/null || die 'Node binary is incompatible with this host'
@@ -100,6 +109,7 @@ if ! valid_node; then
   export PATH="$NODE_HOME/bin:$PATH"
 fi
 valid_node || die 'Node ^22.19 or >=24 and npm are required'
+status "[1/4] Node.js $(node --version) ready"
 
 RUNTIME="$DATA/runtime/dsh-$VERSION"
 CLI="$RUNTIME/node_modules/.bin/dsh"
@@ -108,14 +118,36 @@ if [[ ! -x $CLI ]]; then
   LOCK="$RUNTIME.lock"
   mkdir "$LOCK" 2>/dev/null || { LOCK=; die 'Another Harness installation is in progress'; }
   STAGE=$(mktemp -d "$DATA/runtime/.dsh.XXXXXX")
-  npm install --prefix "$STAGE" --save-exact --no-audit --no-fund \
+  status "[2/4] Installing Harness $VERSION; npm resolves dependencies before downloading"
+  status 'npm has no overall download percentage; elapsed time and completed HTTP/cache operations follow every 5s'
+  STARTED=$SECONDS
+  : > "$STAGE/npm-install.log"
+  npm install --prefix "$STAGE" --save-exact --no-audit --no-fund --progress=false --loglevel=http \
     --registry="${DSH_NPM_REGISTRY:-https://registry.npmjs.org}" \
-    --fetch-timeout=60000 --fetch-retries=1 "@deepseek-ai/dsh@$VERSION" >&2
+    --fetch-timeout=60000 --fetch-retries=1 "@deepseek-ai/dsh@$VERSION" > "$STAGE/npm-install.log" 2>&1 &
+  INSTALL_PID=$!
+  while kill -0 "$INSTALL_PID" 2>/dev/null; do
+    COMPLETED=$(awk '/^npm http / {n++} END {print n+0}' "$STAGE/npm-install.log")
+    status "[2/4] npm: $((SECONDS-STARTED))s elapsed; $COMPLETED HTTP/cache operations completed"
+    sleep 5
+  done
+  if wait "$INSTALL_PID"; then INSTALL_PID=;
+  else
+    INSTALL_CODE=$?
+    INSTALL_PID=
+    cat "$STAGE/npm-install.log" >&2
+    die "npm install failed (exit $INSTALL_CODE)"
+  fi
+  status "[2/4] npm completed in $((SECONDS-STARTED))s"
+  tail -n 5 "$STAGE/npm-install.log" >&2
   "$STAGE/node_modules/.bin/dsh" --version >&2
   [[ ! -e $RUNTIME ]] || die "Incomplete Harness installation exists: $RUNTIME"
   mv "$STAGE" "$RUNTIME"
   STAGE=
   cleanup; LOCK=
+  status "[2/4] Harness ready; installation log: $RUNTIME/npm-install.log"
+else
+  status "[2/4] Reusing installed Harness $VERSION"
 fi
 
 # Clear download proxies only in model/client subprocesses, never in the shell.
@@ -125,6 +157,7 @@ direct() {
 }
 export VLLM_API_KEY=${VLLM_API_KEY:-internal-no-auth}
 export DSH_TELEMETRY_DISABLED=1
+status '[3/4] Connecting to endpoint and discovering models'
 CONNECTION=$(direct node --input-type=module - "$ENDPOINT" "$MODEL" "$DATA" "$MODE" <<'JS'
 import { mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
@@ -230,7 +263,7 @@ JS
 )
 export DSH_HOME="$CONNECTION"
 case "$MODE" in
-  check|install-only) printf 'Ready. Configuration: %s\n' "$DSH_HOME" ;;
-  run) direct "$CLI" headless "$TASK" ;;
-  web) direct "$CLI" web ${WEB_ARGS[@]+"${WEB_ARGS[@]}"} ;;
+  check|install-only) status '[4/4] Ready'; printf 'Ready. Configuration: %s\n' "$DSH_HOME" ;;
+  run) status '[4/4] Starting headless task'; direct "$CLI" headless "$TASK" ;;
+  web) status '[4/4] Starting Web UI; wait for the URL below'; direct "$CLI" web ${WEB_ARGS[@]+"${WEB_ARGS[@]}"} ;;
 esac
