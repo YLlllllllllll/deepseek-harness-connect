@@ -30,6 +30,19 @@ jobs:
         working-directory: macapp
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Verify and launch the packaged app
+        run: |
+          python3 - <<'PY'
+          import plistlib, subprocess
+          from pathlib import Path
+          apps = list(Path('dist/macapp').glob('*/*.app'))
+          assert len(apps) == 1, apps
+          app = apps[0]
+          subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
+          info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
+          subprocess.run([str(app / 'Contents/MacOS' / info['CFBundleExecutable']), '--smoke-test'], check=True, timeout=40)
+          assert b'--remote-ssh' in (app / 'Contents/Resources/connect.sh').read_bytes()
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: Harness-Connect-${{ matrix.arch }}

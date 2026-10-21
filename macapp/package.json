@@ -22,7 +22,7 @@
     "directories": {"output": "../dist/macapp"},
     "mac": {
       "category": "public.app-category.developer-tools",
-      "identity": null,
+      "identity": "-",
       "target": ["dmg", "zip"]
     },
     "artifactName": "Harness-Connect-${version}-${arch}.${ext}"
